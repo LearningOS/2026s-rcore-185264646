@@ -51,6 +51,11 @@ impl MemorySet {
     pub fn token(&self) -> usize {
         self.page_table.token()
     }
+
+    /// Get the page table ref
+    pub fn page_table(&mut self) -> &mut PageTable {
+        &mut self.page_table
+    }
     /// Assume that no conflicts.
     pub fn insert_framed_area(
         &mut self,

@@ -2,7 +2,7 @@
 use super::TaskContext;
 use crate::config::TRAP_CONTEXT_BASE;
 use crate::mm::{
-    kernel_stack_position, MapPermission, MemorySet, PhysPageNum, VirtAddr, KERNEL_SPACE,
+    kernel_stack_position, MapPermission, MemorySet, PageTable, PhysPageNum, VirtAddr, KERNEL_SPACE,
 };
 use crate::trap::{trap_handler, TrapContext};
 
@@ -28,6 +28,9 @@ pub struct TaskControlBlock {
 
     /// Program break
     pub program_brk: usize,
+
+    /// syscall count
+    pub syscall_cnt: [u32; 512],
 }
 
 impl TaskControlBlock {
@@ -38,6 +41,14 @@ impl TaskControlBlock {
     /// get the user token
     pub fn get_user_token(&self) -> usize {
         self.memory_set.token()
+    }
+    /// get page table reference
+    pub fn get_page_table(&mut self) -> &mut PageTable {
+        self.memory_set.page_table()
+    }
+    /// get mutable reference to syscall count
+    pub fn get_syscall_cnt_ref(&mut self, id: u32) -> &mut u32 {
+        self.syscall_cnt.get_mut(id as usize).unwrap()
     }
     /// Based on the elf info in program, build the contents of task in a new address space
     pub fn new(elf_data: &[u8], app_id: usize) -> Self {
@@ -63,6 +74,7 @@ impl TaskControlBlock {
             base_size: user_sp,
             heap_bottom: user_sp,
             program_brk: user_sp,
+            syscall_cnt: [0; 512],
         };
         // prepare TrapContext in user space
         let trap_cx = task_control_block.get_trap_cx();

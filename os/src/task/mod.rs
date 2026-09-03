@@ -14,7 +14,9 @@ mod switch;
 #[allow(clippy::module_inception)]
 mod task;
 
+use core::cell::RefMut;
 use crate::loader::{get_app_data, get_num_app};
+use crate::mm::PageTable;
 use crate::sync::UPSafeCell;
 use crate::trap::TrapContext;
 use alloc::vec::Vec;
@@ -126,6 +128,19 @@ impl TaskManager {
         inner.tasks[inner.current_task].get_trap_cx()
     }
 
+    /// Get the current task's page table
+    fn get_current_page_table(&self) -> RefMut<PageTable> {
+        let inner = self.inner.exclusive_access();
+        let cur = inner.current_task;
+        RefMut::map(inner, |inner| inner.tasks[cur].get_page_table())
+    }
+
+    /// 
+    fn get_current_syscall_cnt_ref(&self, id: u32) -> RefMut<u32> {
+        let inner = self.inner.exclusive_access();
+        RefMut::map(inner, |inner| inner.tasks[inner.current_task].get_syscall_cnt_ref(id))
+    }
+
     /// Change the current 'Running' task's program break
     pub fn change_current_program_brk(&self, size: i32) -> Option<usize> {
         let mut inner = self.inner.exclusive_access();
@@ -196,6 +211,16 @@ pub fn current_user_token() -> usize {
 /// Get the current 'Running' task's trap contexts.
 pub fn current_trap_cx() -> &'static mut TrapContext {
     TASK_MANAGER.get_current_trap_cx()
+}
+
+/// Get the current 'Running' task's page table
+pub fn current_page_table<'a>() -> RefMut<'a, PageTable> {
+    TASK_MANAGER.get_current_page_table()
+}
+
+/// Get the current 'Running' task's syscall count ref
+pub fn current_syscall_cnt_ref<'a>(id: u32) -> RefMut<'a, u32> {
+    TASK_MANAGER.get_current_syscall_cnt_ref(id)
 }
 
 /// Change the current 'Running' task's program break
