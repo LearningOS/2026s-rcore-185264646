@@ -32,7 +32,8 @@ lazy_static! {
 }
 /// address space
 pub struct MemorySet {
-    page_table: PageTable,
+    /// page table
+    pub page_table: PageTable,
     areas: Vec<MapArea>,
 }
 
@@ -43,6 +44,10 @@ impl MemorySet {
             page_table: PageTable::new(),
             areas: Vec::new(),
         }
+    }
+    /// Get the page table
+    pub fn page_table(&mut self) -> &mut PageTable {
+        &mut self.page_table
     }
     /// Get the page table token
     pub fn token(&self) -> usize {
