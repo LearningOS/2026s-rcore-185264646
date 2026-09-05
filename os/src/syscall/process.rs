@@ -262,5 +262,5 @@ pub fn sys_set_priority(prio: isize) -> isize {
 
     current_task().unwrap().inner_exclusive_access().priority = prio as u32;
 
-    0
+    prio
 }
