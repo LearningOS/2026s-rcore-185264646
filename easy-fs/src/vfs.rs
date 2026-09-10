@@ -6,12 +6,22 @@ use alloc::string::String;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use spin::{Mutex, MutexGuard};
+use crate::BLOCK_SZ;
 /// Virtual filesystem layer over easy-fs
 pub struct Inode {
     block_id: usize,
     block_offset: usize,
     fs: Arc<Mutex<EasyFileSystem>>,
     block_device: Arc<dyn BlockDevice>,
+}
+
+/// Convert &Inode to u32
+impl From<&Inode> for u32 {
+    fn from(ino: &Inode) -> Self {
+        let inode_size = core::mem::size_of::<DiskInode>();
+        let inodes_per_block = BLOCK_SZ / inode_size;
+        ((ino.block_id - ino.fs.lock().inode_area_start_block as usize) * inodes_per_block + ino.block_offset / inode_size) as u32
+    }
 }
 
 impl Inode {
@@ -57,6 +67,18 @@ impl Inode {
             }
         }
         None
+    }
+    /// Get disk inode type
+    pub fn get_disk_inode_type(&self) -> DiskInodeType {
+        self.read_disk_inode(|ino| {
+            if ino.is_dir() {
+                DiskInodeType::Directory
+            } else if ino.is_file() {
+                DiskInodeType::File
+            } else {
+                panic!("Unknown disk inode type");
+            }
+        })
     }
     /// Find inode under current inode by name
     pub fn find(&self, name: &str) -> Option<Arc<Inode>> {
@@ -137,6 +159,68 @@ impl Inode {
             self.block_device.clone(),
         )))
         // release efs lock automatically by compiler
+    }
+    /// modify reference count
+    pub fn modify_refcnt(&self, f: impl FnOnce(&mut u32)) {
+        self.modify_disk_inode(|ino| {
+            f(&mut ino.ref_cnt);
+        });
+    }
+    /// get current reference count
+    pub fn get_refcnt(&self) -> u32 {
+        self.read_disk_inode(|ino| {
+            ino.ref_cnt
+        })
+    }
+    /// add a DirEntry to root inode
+    pub fn add_dirent(&self, name: &str, inode_id: u32) {
+        let mut fs = self.fs.lock();
+        self.modify_disk_inode(|root_ino| {
+            let new_size = root_ino.size + DIRENT_SZ as u32;
+            self.increase_size(new_size, root_ino, &mut fs);
+            root_ino.write_at(
+                new_size as usize - DIRENT_SZ,
+                DirEntry::new(name, inode_id).as_bytes(),
+                &self.block_device,
+            );
+        });
+    }
+    /// remove a DirEntry from root inode
+    pub fn remove_dirent(&self, name: &str) {
+        let mut done = false;
+        self.modify_disk_inode(|disk_inode| {
+            let file_cnt = (disk_inode.size as usize) / DIRENT_SZ;
+            for i in 0..file_cnt {
+                let mut dirent = DirEntry::empty();
+                assert_eq!(
+                    disk_inode.read_at(i * DIRENT_SZ, dirent.as_bytes_mut(), &self.block_device),
+                    DIRENT_SZ
+                );
+                if dirent.name() == name {
+                    let mut last_dirent = DirEntry::empty();
+                    assert_eq!(
+                        disk_inode.read_at((file_cnt - 1) * DIRENT_SZ, last_dirent.as_bytes_mut(), &self.block_device),
+                        DIRENT_SZ
+                    );
+                    assert_eq!(
+                        disk_inode.write_at(i * DIRENT_SZ, last_dirent.as_bytes(), &self.block_device),
+                        DIRENT_SZ
+                    );
+                    // mark the last dirent as invalid
+                    // TODO: the better way is to delete the dirent and deallocate the data
+                    assert_eq!(
+                        disk_inode.write_at((file_cnt - 1) * DIRENT_SZ, DirEntry::new("*** REMOVED-FILE ***", 0).as_bytes(), &self.block_device),
+                        DIRENT_SZ
+                    );
+
+                    done = true;
+                    break;
+                }
+            }
+            if !done {
+                panic!("Remove a non-existant dirent");
+            }
+        });
     }
     /// List inodes under current inode
     pub fn ls(&self) -> Vec<String> {

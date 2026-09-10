@@ -4,14 +4,14 @@
 //!
 //! `UPSafeCell<OSInodeInner>` -> `OSInode`: for static `ROOT_INODE`,we
 //! need to wrap `OSInodeInner` into `UPSafeCell`
-use super::File;
+use super::{File, Stat, StatMode};
 use crate::drivers::BLOCK_DEVICE;
 use crate::mm::UserBuffer;
 use crate::sync::UPSafeCell;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use bitflags::*;
-use easy_fs::{EasyFileSystem, Inode};
+use easy_fs::{EasyFileSystem, Inode, DiskInodeType};
 use lazy_static::*;
 
 /// inode in memory
@@ -125,6 +125,34 @@ pub fn open_file(name: &str, flags: OpenFlags) -> Option<Arc<OSInode>> {
     }
 }
 
+/// Create hard link from `old` to `new`
+pub fn linkat(old: &str, new: &str) -> isize {
+    if old == new {
+        return -1;
+    }
+
+    if let Some(old_ino) = ROOT_INODE.find(old) {
+        ROOT_INODE.add_dirent(new, old_ino.as_ref().into());
+        old_ino.modify_refcnt(|cnt| *cnt += 1);
+        0
+    } else {
+        // old does not exist
+        return -1;
+    }
+}
+
+/// unlink a diskentry
+pub fn unlinkat(name: &str) -> isize {
+    if let Some(inode) = ROOT_INODE.find(name) {
+        ROOT_INODE.remove_dirent(name);
+        inode.modify_refcnt(|cnt| *cnt -= 1);
+        0
+    } else {
+        println!("file not exist");
+        -1
+    }
+}
+
 impl File for OSInode {
     fn readable(&self) -> bool {
         self.readable
@@ -155,5 +183,18 @@ impl File for OSInode {
             total_write_size += write_size;
         }
         total_write_size
+    }
+    fn stat(&self) -> Stat {
+        let inner = self.inner.exclusive_access();
+        Stat {
+            dev: 0,
+            ino: u32::from(inner.inode.as_ref()) as u64,
+            mode: match inner.inode.get_disk_inode_type() {
+                DiskInodeType::Directory => StatMode::DIR,
+                DiskInodeType::File => StatMode::FILE,
+            },
+            nlink: inner.inode.get_refcnt(),
+            pad: [0; 7],
+        }
     }
 }
