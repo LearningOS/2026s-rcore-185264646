@@ -4,11 +4,12 @@ use alloc::sync::Arc;
 
 use crate::{
     fs::{open_file, OpenFlags},
-    mm::{translated_refmut, translated_str},
+    mm::{translated_refmut, translated_str, translated_byte_buffer},
     task::{
         add_task, current_task, current_user_token, exit_current_and_run_next,
         suspend_current_and_run_next,
     },
+    timer::get_time_us,
 };
 
 #[repr(C)]
@@ -105,12 +106,25 @@ pub fn sys_waitpid(pid: isize, exit_code_ptr: *mut i32) -> isize {
 /// YOUR JOB: get time with second and microsecond
 /// HINT: You might reimplement it with virtual memory management.
 /// HINT: What if [`TimeVal`] is splitted by two pages ?
-pub fn sys_get_time(_ts: *mut TimeVal, _tz: usize) -> isize {
+pub fn sys_get_time(ts: *mut TimeVal, _tz: usize) -> isize {
     trace!(
-        "kernel:pid[{}] sys_get_time NOT IMPLEMENTED",
+        "kernel:pid[{}] sys_get_time",
         current_task().unwrap().pid.0
     );
-    -1
+    let buffers = translated_byte_buffer(current_user_token(), ts as *const u8, core::mem::size_of::<TimeVal>());
+    let time = get_time_us();
+    const MICRO_PER_SEC: usize = 1000000;
+    let timeval = TimeVal {
+        sec: time / MICRO_PER_SEC,
+        usec: time % MICRO_PER_SEC,
+    };
+
+    let ptr = &timeval as *const TimeVal as *const u8;
+    for (dst, idx) in buffers.into_iter().flatten().zip(0..core::mem::size_of::<TimeVal>()) {
+        unsafe { *dst = *ptr.add(idx); }
+    }
+
+    0
 }
 
 /// YOUR JOB: Implement mmap.
