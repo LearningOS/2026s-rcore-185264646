@@ -49,10 +49,13 @@ pub fn sys_mutex_create(blocking: bool) -> isize {
         .map(|(id, _)| id)
     {
         process_inner.mutex_list[id] = mutex;
+        process_inner.mutex_manager.create_res(id, 1);
         id as isize
     } else {
         process_inner.mutex_list.push(mutex);
-        process_inner.mutex_list.len() as isize - 1
+        let id = process_inner.mutex_list.len() as isize - 1;
+        process_inner.mutex_manager.create_res(id as usize, 1);
+        id
     }
 }
 /// mutex lock syscall
@@ -69,11 +72,18 @@ pub fn sys_mutex_lock(mutex_id: usize) -> isize {
             .tid
     );
     let process = current_process();
-    let process_inner = process.inner_exclusive_access();
+    let mut process_inner = process.inner_exclusive_access();
     let mutex = Arc::clone(process_inner.mutex_list[mutex_id].as_ref().unwrap());
+    let tid = current_task().unwrap().inner_exclusive_access().res.as_ref().unwrap().tid;
+    if !process_inner.mutex_manager.alloc_res(tid, mutex_id) {
+        return -0xDEAD;
+    }
     drop(process_inner);
     drop(process);
     mutex.lock();
+    let process = current_process();
+    let mut process_inner = process.inner_exclusive_access();
+    process_inner.mutex_manager.alloc_res_done(tid, mutex_id);
     0
 }
 /// mutex unlock syscall
@@ -90,8 +100,10 @@ pub fn sys_mutex_unlock(mutex_id: usize) -> isize {
             .tid
     );
     let process = current_process();
-    let process_inner = process.inner_exclusive_access();
+    let mut process_inner = process.inner_exclusive_access();
     let mutex = Arc::clone(process_inner.mutex_list[mutex_id].as_ref().unwrap());
+    let tid = current_task().unwrap().inner_exclusive_access().res.as_ref().unwrap().tid;
+    process_inner.mutex_manager.free_res(tid, mutex_id);
     drop(process_inner);
     drop(process);
     mutex.unlock();
@@ -120,12 +132,15 @@ pub fn sys_semaphore_create(res_count: usize) -> isize {
         .map(|(id, _)| id)
     {
         process_inner.semaphore_list[id] = Some(Arc::new(Semaphore::new(res_count)));
+        process_inner.sem_manager.create_res(id, res_count as u32);
         id
     } else {
         process_inner
             .semaphore_list
             .push(Some(Arc::new(Semaphore::new(res_count))));
-        process_inner.semaphore_list.len() - 1
+        let id = process_inner.semaphore_list.len() - 1;
+        process_inner.sem_manager.create_res(id, res_count as u32);
+        id
     };
     id as isize
 }
@@ -142,9 +157,11 @@ pub fn sys_semaphore_up(sem_id: usize) -> isize {
             .unwrap()
             .tid
     );
+    let tid = current_task().unwrap().inner_exclusive_access().res.as_ref().unwrap().tid;
     let process = current_process();
-    let process_inner = process.inner_exclusive_access();
+    let mut process_inner = process.inner_exclusive_access();
     let sem = Arc::clone(process_inner.semaphore_list[sem_id].as_ref().unwrap());
+    process_inner.sem_manager.free_res(tid, sem_id);
     drop(process_inner);
     sem.up();
     0
@@ -162,11 +179,17 @@ pub fn sys_semaphore_down(sem_id: usize) -> isize {
             .unwrap()
             .tid
     );
+    let tid = current_task().unwrap().inner_exclusive_access().res.as_ref().unwrap().tid;
     let process = current_process();
-    let process_inner = process.inner_exclusive_access();
+    let mut process_inner = process.inner_exclusive_access();
     let sem = Arc::clone(process_inner.semaphore_list[sem_id].as_ref().unwrap());
+    if !process_inner.sem_manager.alloc_res(tid, sem_id) {
+        return -0xDEAD;
+    }
     drop(process_inner);
     sem.down();
+    let mut process_inner = process.inner_exclusive_access();
+    process_inner.sem_manager.alloc_res_done(tid, sem_id);
     0
 }
 /// condvar create syscall
