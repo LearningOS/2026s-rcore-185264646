@@ -4,7 +4,7 @@ use alloc::sync::Arc;
 
 use crate::{
     fs::{open_file, OpenFlags},
-    mm::{translated_refmut, translated_str, translated_byte_buffer},
+    mm::{MapPermission, VirtAddr, VirtPageNum, translated_refmut, translated_str, translated_byte_buffer},
     task::{
         add_task, current_task, current_user_token, exit_current_and_run_next,
         suspend_current_and_run_next,
@@ -128,21 +128,79 @@ pub fn sys_get_time(ts: *mut TimeVal, _tz: usize) -> isize {
 }
 
 /// YOUR JOB: Implement mmap.
-pub fn sys_mmap(_start: usize, _len: usize, _port: usize) -> isize {
+pub fn sys_mmap(start: usize, len: usize, prot: usize) -> isize {
     trace!(
-        "kernel:pid[{}] sys_mmap NOT IMPLEMENTED",
+        "kernel:pid[{}] sys_mmap",
         current_task().unwrap().pid.0
     );
-    -1
+
+    let start_va = VirtAddr(start);
+
+    if !start_va.aligned() {
+        return -1;
+    }
+
+    if (prot & 0x7 == 0) || (prot & !0x7 != 0) {
+        return -1;
+    }
+
+    let mut perm = MapPermission::U;
+    if prot & 0x1 != 0 {
+        perm |= MapPermission::R;
+    }
+    if prot & 0x2 != 0 {
+        perm |= MapPermission::W;
+    }
+    if prot & 0x4 != 0 {
+        perm |= MapPermission::X;
+    }
+
+    let start_vpn: usize = VirtPageNum::from(start_va).into();
+    let end_vpn: usize = VirtAddr(usize::from(start_va) + len).ceil().into();
+    let task = current_task().unwrap();
+    let mut memory_set = task.get_memory_set();
+
+    for vpn in start_vpn..end_vpn {
+        if let Some(pte) = memory_set.page_table.translate(VirtPageNum(vpn)) {
+            if pte.is_valid() {
+                return -1;
+            }
+        }
+    }
+
+    memory_set.insert_framed_area(start_va, VirtAddr(start + len), perm);
+    0
 }
 
 /// YOUR JOB: Implement munmap.
-pub fn sys_munmap(_start: usize, _len: usize) -> isize {
+pub fn sys_munmap(start: usize, len: usize) -> isize {
     trace!(
-        "kernel:pid[{}] sys_munmap NOT IMPLEMENTED",
+        "kernel:pid[{}] sys_munmap",
         current_task().unwrap().pid.0
     );
-    -1
+
+    let start_va = VirtAddr(start);
+    if !start_va.aligned() {
+        return -1;
+    }
+
+    let start_vpn: usize = VirtPageNum::from(start_va).into();
+    let end_vpn: usize = VirtAddr(usize::from(start_va) + len).ceil().into();
+    let task = current_task().unwrap();
+    let mut memory_set = task.get_memory_set();
+
+    for vpn in start_vpn..end_vpn {
+        if let Some(pte) = memory_set.page_table.translate(VirtPageNum(vpn)) {
+            if !pte.is_valid() {
+                return -1;
+            }
+        } else {
+            return -1;
+        }
+    }
+
+    memory_set.remove_area_with_start_vpn(start_va.into());
+    0
 }
 
 /// change data segment size
